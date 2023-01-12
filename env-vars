@@ -1,0 +1,15 @@
+VCENTER_USERNAME=administrator@vsphere.local
+VCENTER_PASSWORD=password
+VCENTER_URL=vcenter.testnet.lan
+VCENTER_ESX_HOST=192.168.1.1
+VCENTER_ISO_LOCATION=[datastore2] ISO/almalinux8_minimal.iso
+VM_USERNAME=root
+VM_PASSWORD=password
+VM_NETWORK=VM Network
+VM_NAME=template-almalinux8
+VM_DISK_SIZE=10000
+VCENTER_DATACENTER=datacenter
+VCENTER_CLUSTER=cluster
+VCENTER_DATASTORE=datastore2
+VCENTER_FOLDER=Templates
+ANSIBLE_SSH_KEY=ssh_private_key

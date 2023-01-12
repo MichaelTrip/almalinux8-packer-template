@@ -1,0 +1,12 @@
+ansible
+ansible-core
+cryptography
+jinja2
+netaddr
+pbr
+jmespath
+ruamel.yaml
+ruamel.yaml.clib
+MarkupSafe
+ansible-lint
+requests-oauthlib

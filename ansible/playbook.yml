@@ -1,0 +1,115 @@
+- name: post tasks after deploying template
+  hosts: default
+  become: true
+
+  tasks:
+
+
+
+    - name: ensure that proxy url in yum.conf and dnf.conf is set
+      community.general.ini_file:
+        path: "{{ item }}"
+        section: main
+        option: proxy
+        value: "http://proxy.testnet.lan:3128"
+        no_extra_spaces: true
+        mode: 0644
+      loop:
+        - /etc/yum.conf
+        - /etc/dnf/dnf.conf
+
+    - name: Install extra packages for templating
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - cloud-init
+        - cloud-utils-growpart
+        - perl
+
+    - name: Virtual Machine customized with cloud-init is set to DHCP after reboot
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/cloud.cfg.d/99-manual.cfg
+        line: "manual_cache_clean: True"
+        create: true
+
+    - name: Do a complete upgrade of all packages
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+
+    - name: Disable NetworkManager-wait-online.service
+      ansible.builtin.systemd:
+        name: NetworkManager-wait-online
+        state: stopped
+        enabled: false
+
+    - name: Cleanup current SSH keys so templated VMs get fresh key
+      ansible.builtin.shell: |
+        rm -f /etc/ssh/ssh_host_*
+
+    - name: Do a autoremove to remove obsolete packages
+      ansible.builtin.shell: |
+        dnf -y autoremove
+
+    - name: Remove previous kernels that preserved for rollbacks
+      ansible.builtin.shell: |
+        dnf -y remove -y $(dnf repoquery --installonly --latest-limit=-1 -q)
+        dnf -y clean all  --enablerepo=\*;
+
+    - name: Truncate any logs that have built up during the install
+      ansible.builtin.shell: |
+        find /var/log -type f -exec truncate --size=0 {} \;
+
+    - name: Remove install log
+      ansible.builtin.shell: |
+        rm -f /root/anaconda-ks.cfg /root/original-ks.cfg
+
+    - name: Remove the contents of /tmp and /var/tmp
+      ansible.builtin.shell: |
+        rm -rf /tmp/* /var/tmp/*
+
+    - name: Force a new random seed to be generated
+      ansible.builtin.shell:
+        rm -f /var/lib/systemd/random-seed
+
+    - name: Force a new random seed to be generated
+      ansible.builtin.shell: |
+        rm -f /var/lib/systemd/random-
+
+    - name: Wipe netplan machine-id (DUID) so machines get unique ID generated on boot
+      ansible.builtin.shell: |
+        truncate -s 0 /etc/machine-id
+
+    - name: Clear the history so our install commands aren't there
+      ansible.builtin.shell: |
+        rm -f /root/.wget-hsts
+        export HISTSIZE=0
+
+
+    - name: set disable_root to false in cloud.cfg
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/cloud.cfg
+        state: present
+        regexp: '^.disable_root.*'
+        line: 'disable_root: false'
+
+    - name: set disable_root to false in cloud.cfg
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/cloud.cfg
+        state: present
+        regexp: '^.disable_root:.*'
+        line: 'disable_root: 0'
+
+    - name: set disable_root to false in cloud.cfg
+      ansible.builtin.lineinfile:
+        path: /etc/cloud/cloud.cfg
+        state: present
+        regexp: '^.ssh_pwauth.*'
+        line: 'ssh_pwauth: 1'
+
+...
+
+
+
+

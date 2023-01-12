@@ -1,0 +1,240 @@
+stages:
+  - verify
+  - build
+  - publish_on_push
+  - publish_on_merge
+  - deploy_kickstart
+  - deploy_template
+
+variables:
+  http_proxy: 'http://proxy.testnet.lan:3128/'
+  https_proxy: 'http://proxy.testnet.lan:3128/'
+  no_proxy: 'docker,127.0.0.1,::1,localhost,localhost.localdomain,192.168.1.0/24,testnet.lan'
+  HTTP_PROXY: 'http://proxy.testnet.lan:3128/'
+  HTTPS_PROXY: 'http://proxy.testnet.lan:3128/'
+  NO_PROXY: 'docker,127.0.0.1,::1,localhost,localhost.localdomain,192.168.1.0/24,testnet.lan'
+
+lint_container:
+  stage: verify
+  tags:
+    - kubernetes
+  image: registry.gitlab.com/pipeline-components/hadolint:latest
+  script:
+    - hadolint -t warning ./Dockerfile
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      when: on_success
+
+lint_packer_file:
+  stage: verify
+  tags:
+    - kubernetes
+  image: hashicorp/packer
+  variables: # specify random values for packer
+    VCENTER_URL: vcenter.testnet.lan
+    VCENTER_ESX_HOST: esx.testnet.lan
+    VCENTER_CLUSTER: Cluster
+    VCENTER_ISO_LOCATION: "[ISO] almalinux/almalinux8_minimal.iso"
+    VCENTER_DATACENTER: Test
+    VCENTER_DATASTORE: test_datastore
+    VCENTER_FOLDER: templates
+    VM_NAME: almalinux8-template
+    VM_DISK_SIZE: 10000
+    VM_NETWORK: VM Network
+  script:
+    - packer validate -syntax-only $CI_PROJECT_DIR/template.pkr.hcl
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      when: on_success
+
+lint_kickstart_file:
+  stage: verify
+  tags:
+    - kubernetes
+  image: michaeltrip/pykickstart
+  script:
+    - ksvalidator --version=RHEL8 $CI_PROJECT_DIR/kickstart/kickstart.ks
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      when: on_success
+
+build_container_on_push_changes:
+  stage: build
+  tags:
+    - kubernetes
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+        --context $CI_PROJECT_DIR
+        --dockerfile $CI_PROJECT_DIR/Dockerfile
+        --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+        --snapshotMode=redo
+        --build-arg HTTPS_PROXY=$https_proxy
+        --build-arg HTTP_PROXY=$http_proxy
+        --build-arg NO_PROXY=$no_proxy
+        --use-new-run
+  timeout: 4h
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      changes:
+        - Dockerfile
+        - ansible/*
+        - scripts/*
+        - src/*
+        - template.pkr.hcl
+      when: on_success
+
+build_container_on_push_manually:
+  stage: build
+  tags:
+    - kubernetes
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+        --context $CI_PROJECT_DIR
+        --dockerfile $CI_PROJECT_DIR/Dockerfile
+        --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+        --snapshotMode=redo
+        --build-arg HTTPS_PROXY=$https_proxy
+        --build-arg HTTP_PROXY=$http_proxy
+        --build-arg NO_PROXY=$no_proxy
+        --use-new-run
+  timeout: 4h
+  when: manual
+  allow_failure: true
+
+publish_container_on_push_changes:
+  stage: publish_on_push
+  tags:
+    - kubernetes
+  image:
+    name: gcr.io/go-containerregistry/crane:debug
+    entrypoint: [""]
+  script:
+    - crane auth login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - crane tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME  $CI_COMMIT_REF_NAME
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      changes:
+        - Dockerfile
+        - ansible/*
+        - scripts/*
+        - src/*
+        - template.pkr.hcl
+      when: on_success
+
+publish_container_on_push_manually:
+  stage: publish_on_push
+  tags:
+    - kubernetes
+  image:
+    name: gcr.io/go-containerregistry/crane:debug
+    entrypoint: [""]
+  script:
+    - crane auth login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - crane tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME  $CI_COMMIT_REF_NAME
+  when: manual
+  allow_failure: true
+
+publish_latest:
+  stage: publish_on_merge
+  tags:
+    - kubernetes
+  image:
+    name: gcr.io/go-containerregistry/crane:debug
+    entrypoint: [""]
+  script:
+    - crane auth login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - crane tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: on_success
+
+deploy_kickstart:
+  stage: deploy_kickstart
+  tags:
+    - kubernetes
+  image:
+    name: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+    entrypoint: ["/app/entrypoint.sh"]
+  script:
+    - mkdir -p ~/.ssh
+    - echo "$ANSIBLE_SSH_KEY" | base64 -d > ~/.ssh/id_rsa
+    - chmod 0600 ~/.ssh/id_rsa
+    - cd $CI_PROJECT_DIR
+    - scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa kickstart/kickstart.ks ansible@webserver.testnet.lan:/var/www/html/deploy/template-kickstart/kickstart.ks
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != "null"
+      changes:
+        - kickstart/kickstart.ks
+      when: on_success
+
+deploy_kickstart_manually:
+  stage: deploy_kickstart
+  tags:
+    - kubernetes
+  image:
+    name: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+    entrypoint: ["/app/entrypoint.sh"]
+  script:
+    - mkdir -p ~/.ssh
+    - echo "$ANSIBLE_SSH_KEY" | base64 -d > ~/.ssh/id_rsa
+    - chmod 0600 ~/.ssh/id_rsa
+    - scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa $CI_PROJECT_DIR/kickstart/kickstart.ks ansible@webserver.testnet.lan:/var/www/html/deploy/template-kickstart/kickstart.ks
+  when: manual
+
+deploy_template_to_prod:
+  stage: deploy_template
+  tags:
+    - kubernetes
+  image:
+    name: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+    entrypoint: ["/app/entrypoint.sh"]
+  variables:
+    VCENTER_URL: vcenter-prod.testnet.lan
+    VCENTER_ESX_HOST: esxvsr1.testnet.lan
+    VCENTER_CLUSTER: Cluster
+    VCENTER_ISO_LOCATION: "[ISO] almalinux/almalinux8_minimal.iso"
+    VCENTER_DATACENTER: Datacenter
+    VCENTER_DATASTORE: datastore2
+    VCENTER_FOLDER: _templates
+    VM_NAME: almalinux8-template
+    VM_DISK_SIZE: 35840
+    VM_NETWORK: VM Network
+  script:
+    - source /app/ansible/bin/activate
+    - packer build -force -debug template.pkr.hcl
+  when: manual
+  allow_failure: false
+
+deploy_template_to_dev:
+  stage: deploy_template
+  tags:
+    - kubernetes
+  variables:
+    VCENTER_URL: vcenter-dev.testnet.lan
+    VCENTER_ESX_HOST: esxvsd1.testnet.lan
+    VCENTER_CLUSTER: Cluster
+    VCENTER_ISO_LOCATION: '[non_rep] ISO/almalinux/almalinux8_minimal.iso'
+    VCENTER_DATACENTER: Datacenter
+    VCENTER_DATASTORE: datastore2
+    VCENTER_FOLDER: _templates
+    VM_NAME: almalinux8-template
+    VM_DISK_SIZE: 35840
+    VM_NETWORK: VM Network
+  image:
+    name: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+    entrypoint: ["/app/entrypoint.sh"]
+  script:
+    - source /app/ansible/bin/activate
+    - packer build -force template.pkr.hcl
+  when: manual
+  allow_failure: false
