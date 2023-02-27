@@ -6,10 +6,10 @@ LABEL maintainer="Michael Trip <m.trip@atcomputing.nl>"
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add python3-dev~=3.10.9 \
-        py3-pip~=22.3.1 \
+    apk --no-cache add python3-dev~=3.10 \
+        py3-pip~=22.3 \
         build-base~=0.5 \
-        libffi-dev~=3.4.4
+        libffi-dev~=3.4
 COPY src/requirements.txt /tmp
 
 WORKDIR /app
